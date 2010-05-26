@@ -10,7 +10,7 @@
  * Licensed under The MIT License
  * Redistributions of files must retain the above copyright notice.
  *
- * @version    1.0.0
+ * @version    1.0.1
  * @author     nojimage <nojimage at gmail.com>
  * @copyright  2010 nojimage (http://php-tips.com/)
  * @license    http://www.opensource.org/licenses/mit-license.php The MIT License
@@ -24,7 +24,7 @@ class SqlDumper extends Object {
 
     var $description = '';
 
-    var $message = 'generator: SqlDumper for CakePHP ver 1.0.0';
+    var $message = 'generator: SqlDumper for CakePHP ver 1.0.1';
 
     /**
      * output filename prefix
@@ -224,10 +224,10 @@ class SqlDumper extends Object {
             /* @var $model AppModel */
             $model = ClassRegistry::init(array('class' => Inflector::classify($table), 'table' => $table));
 
-            $fields = array_keys($this->DataSource->describe($model));
+            $field_names = array_keys($this->DataSource->describe($model));
 
             $full_tablename = $this->DataSource->fullTableName($model);
-            $all_fields = implode(', ', array_map(array($this->DataSource, 'name'), $fields));
+            $all_fields = implode(', ', array_map(array($this->DataSource, 'name'), $field_names));
 
             $count_query = array(
                 'table'  => $full_tablename,
@@ -248,7 +248,7 @@ class SqlDumper extends Object {
 
             $query = array(
                 'table'  => $full_tablename,
-                'fields' => $all_fields,
+                'fields' => implode(', ', $this->DataSource->fields($model)),
                 'alias'  => $this->DataSource->alias . $this->DataSource->name($model->alias),
                 'joins'  => '',
                 'conditions' => '',
@@ -258,6 +258,7 @@ class SqlDumper extends Object {
             );
 
             $limit = 100;
+            $record = array();
 
             for ($offset = 0; $offset < $total; $offset += $limit) {
 
@@ -275,11 +276,36 @@ class SqlDumper extends Object {
                         'values' => implode(', ', array_map(array($this->DataSource, 'value'), array_values($record[$model->alias])))
                     );
 
-                    $_sql = $this->out($this->DataSource->renderStatement('create', $insert_query));
+                    $_sql = $this->out($this->DataSource->renderStatement('create', $insert_query) . ';');
 
                     if ($return) {
                         $insert_sql .= $_sql;
                     }
+                }
+
+            }
+
+            // -- sequence update section for postgres
+            // NOTE: only primary key sequence..
+            if (method_exists($this->DataSource, 'getSequence')) {
+
+                foreach ($fields as $field => $column) {
+
+                    if ($field == 'indexes' || empty($record)) {
+                        continue;
+                    }
+
+                    if ($column['type'] == 'integer' && isset($column['key']) && $column['key'] == 'primary') {
+                        // only primary key
+                        $sequence_name = $this->DataSource->getSequence($this->DataSource->fullTableName($model, false), $field);
+
+                        $_sql  = $this->out( sprintf('SELECT setval(%s, %s);', $this->DataSource->value($sequence_name), $record[$model->alias][$field]) );
+
+                        if ($return) {
+                            $insert_sql .= $_sql;
+                        }
+                    }
+
                 }
 
             }
@@ -305,7 +331,7 @@ class SqlDumper extends Object {
         }
 
         // get datasouces tables
-        $schema = $this->Schema->read(array('connection' => $this->DataSource->configKeyName));
+        $schema = $this->Schema->read(array('connection' => $this->DataSource->configKeyName, 'models' => false));
         $this->_tables = $schema['tables'];
 
         return true;
@@ -403,7 +429,10 @@ class SqlDumper extends Object {
         $sql[] = '-- generated on: ' . date('Y-m-d H:i:s') . ' : ' . time();
         $sql[] = $this->hr(0);
         $sql[] = '';
-        $sql[] = 'use ' . $this->DataSource->name($this->DataSource->config['database']) . ';';
+
+        if (preg_match('/^mysql/i', $this->DataSource->config['driver'])) {
+            $sql[] = 'use ' . $this->DataSource->name($this->DataSource->config['database']) . ';';
+        }
 
         if (!empty($this->DataSource->config['encoding'])) {
             $sql[] = 'SET NAMES ' . $this->DataSource->value($this->DataSource->config['encoding']) . ';';
